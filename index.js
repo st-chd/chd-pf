@@ -17,8 +17,8 @@
     let searchHasFocus = false;
     let dirty = false;
     let isImporting = false;
-    let isDragging = false; // 프롬프트 드래그 중인지 추적
     let needsSTSync = false; // 유저가 폴더를 직접 다시 정렬할 때만 참(true)이 됩니다.
+    let wasDragging = false; // 기본 드래그 앤 드롭 동작 추적용
 
     /* ─── 설정 도우미 (Settings helpers) ─── */
     function ctx() { return SillyTavern.getContext(); }
@@ -1195,65 +1195,40 @@
         if (!target) return;
         if (observer) observer.disconnect();
         observer = new MutationObserver((mutations) => {
-            if (searchHasFocus || isDragging) return;
-
-            // 드래그 고스트 엘리먼트 등의 위치 변경만 있는 쓰레기 이벤트 무시 (100+개 이상 프롬프트에서 렉 방지)
-            const isOnlyGhostMove = mutations.every(m =>
-                m.target && m.target.classList &&
-                (m.target.classList.contains('sortable-ghost') || m.target.classList.contains('sortable-drag'))
-            );
-            if (isOnlyGhostMove) return;
-
+            if (searchHasFocus) return;
             const list = getListContainer();
-            if (list && !isRebuilding) {
+            if (!list) return;
+
+            // ST의 SortableJS가 드래그 중(고스트 엘리먼트 존재)이라면
+            // 어떠한 해시 검사나 화면 갱신도 하지 않고 즉시 종료! (100개 이상 프롬프트 드래그 렉의 근본 원인 차단)
+            if (list.querySelector('.sortable-chosen, .sortable-ghost, .sortable-drag')) {
+                wasDragging = true;
+                return;
+            }
+
+            if (!isRebuilding) {
                 // ST가 새로운 프롬프트를 추가/삭제하여 실제 구조가 변경되었는지 확인
                 const currentHash = Array.from(list.querySelectorAll('[data-pm-identifier]'))
                     .map(r => r.getAttribute('data-pm-identifier'))
                     .filter(Boolean).join('|');
 
                 // 해시가 같으면 (우리가 DOM을 조작해서 발생한 이벤트면) 무시
-                if (list._pfHash === currentHash) return;
+                if (list._pfHash === currentHash) {
+                    wasDragging = false;
+                    return;
+                }
+
+                // 드래그가 방금 막 끝난 상황이라 해시가 변경된 경우 -> ST 내부 데이터도 동기화해줘야 함
+                if (wasDragging) {
+                    console.log('[PF] 드래그 완료 감지. 프롬프트 순서 동기화 플래그 활성화');
+                    needsSTSync = true;
+                    wasDragging = false;
+                }
 
                 rebuildFolderUI();
             }
         });
         observer.observe(target, { childList: true, subtree: true });
-
-        // 네이티브 드래그 중 MutationObserver 무한 루프(프리징) 방지
-        const list = getListContainer();
-        if (list && !list._pfDnD) {
-            list._pfDnD = true;
-            list.addEventListener('pointerdown', (e) => {
-                // 핸들을 잡았을 때만 드래그 시작으로 간주 (SillyTavern 기본 핸들 클래스)
-                if (e.target.closest('.drag-handle') || e.target.closest('.prompt_manager_drag')) {
-                    isDragging = true;
-                }
-            }, { passive: true });
-            // 드래그가 끝났을 때 다시 UI 재구성 및 ST 원래 구조 보호(동기화)
-            const handleDragEnd = () => {
-                if (isDragging) {
-                    isDragging = false;
-                    setTimeout(() => {
-                        if (!isRebuilding) {
-                            // 네이티브 프롬프트 드래그 앤 드롭으로 인한 ST 내부 배열 순서 동기화
-                            const rows = getPromptRows(list);
-                            const ids = rows.map(r => r.getAttribute('data-pm-identifier')).filter(Boolean);
-                            const d = getPresetData();
-                            if (d.promptOrder && d.promptOrder.length > 0 && d.promptOrder.join(',') !== ids.join(',')) {
-                                console.log('[PF] 네이티브 프롬프트 드래그 완료. 내부 배열 수정 중...');
-                                needsSTSync = true;
-                                syncPromptOrder(list);
-                            }
-                            rebuildFolderUI();
-                        }
-                    }, 50);
-                }
-            };
-
-            list.addEventListener('pointerup', handleDragEnd);
-            // 드래그가 화면 밖에서 끝났을 때를 대비
-            document.addEventListener('pointerup', handleDragEnd);
-        }
     }
 
     /* ─── 슬래시 명령어 (Slash Commands) ─── */
