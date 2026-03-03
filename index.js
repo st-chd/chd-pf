@@ -1197,15 +1197,36 @@
             const list = getListContainer();
             if (!list) return;
 
-            // ST의 SortableJS가 드래그 중(고스트 엘리먼트 존재)이라면
-            // 어떠한 해시 검사나 화면 갱신도 하지 않고 즉시 종료! (100개 이상 프롬프트 드래그 렉의 근본 원인 차단)
+            // ST의 SortableJS가 드래그 중(고스트 엘리먼트 존재)이라면 즉시 종료!
             if (list.querySelector('.sortable-chosen, .sortable-ghost, .sortable-drag')) {
                 wasDragging = true;
                 return;
             }
 
+            // [Mousedown Freeze 핵심 원인 해결]: 
+            // SortableJS는 마우스를 누르자마자 `.sortable-chosen` 클래스를 부여하기 직전에 
+            // 드래그 대상 요소의 `style`, `class`, `draggable` 속성 등을 연속으로 변경합니다.
+            // 이때 발생하는 수십 번의 mutation마다 100+개의 프롬프트를 스캔하여 Hash를 만들면 
+            // 브라우저 메인 스레드가 완전히 잠기며 3초 이상의 프리징이 발생합니다.
+            // 따라서, 실제 자식 노드(프롬프트 DOM Element)의 추가/삭제가 아닌
+            // '단순 속성 변경(attributes)'만 발생한 mutation은 프롬프트 개수 해시 스캔을 전부 건너뜁니다!
+            let hasChildListChange = false;
+            for (const m of mutations) {
+                if (m.type === 'childList') {
+                    hasChildListChange = true;
+                    break;
+                }
+            }
+
+            // 프롬프트가 실제로 추가/제거된 것이 아니라, SortableJS가 마우스를 누를 때 발생시킨 
+            // 클래스/스타일 변경 이벤트라면 무시합니다. (Mousedown 딜레이 0초 달성)
+            if (!hasChildListChange && !wasDragging) {
+                return;
+            }
+
             if (!isRebuilding) {
                 // ST가 새로운 프롬프트를 추가/삭제하여 실제 구조가 변경되었는지 확인
+                // 이 무거운 O(N) 작업은 이제 '실제 프롬프트 추가/삭제' 시에만 실행됩니다.
                 const currentHash = Array.from(list.querySelectorAll('[data-pm-identifier]'))
                     .map(r => r.getAttribute('data-pm-identifier'))
                     .filter(Boolean).join('|');

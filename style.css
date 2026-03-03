@@ -412,27 +412,9 @@
     transition: none;
 }
 
-/* ─── ST 기본 프롬프트 드래그 (SortableJS) 최적화 (100+ 프롬프트 환경 렉 강제 격리) ─── */
+/* ─── ST 기본 프롬프트 드래그 (SortableJS) 최적화 ─── */
 .sortable-ghost,
 .sortable-drag {
     pointer-events: none !important;
     opacity: 0.6 !important;
-    transform: translateZ(0) !important;
-    /* 하드웨어 가속 강제 활성화 */
-    will-change: transform, top, left !important;
-}
-
-/* 드래그 중일 때는 리스트 전체의 모든 CSS 애니메이션과 전환 효과를 무력화 (레이아웃 스래싱 방지) */
-.completion_prompt_manager .sortable-drag~*,
-.completion_prompt_manager .sortable-ghost~*,
-.pf-folder-item {
-    transition: none !important;
-    animation: none !important;
-}
-
-/* 드래그 딜레이(Mousedown Freeze) 원인 제거: SortableJS의 다중 중첩 요소 Hit-Test를 
-   건너뛰기 위해 드래그 중에 폴더 헤더와 하위 요소들의 이벤트를 강제 무시 */
-body:has(.sortable-drag) .pf-folder-header,
-body:has(.sortable-ghost) .pf-folder-header {
-    pointer-events: none !important;
 }
