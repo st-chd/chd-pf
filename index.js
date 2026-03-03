@@ -239,6 +239,9 @@
                         reordered.forEach(p => prompts.push(p));
                     }
 
+                    // ★ Also reorder prompt_order (controls actual sending order in ST)
+                    reorderPromptOrderEntries(pm, orderedIds);
+
                     // Flush folder and order settings immediately when drag-and-drop modifies order
                     if (extensionOrderChanged) {
                         persistNow();
@@ -246,11 +249,68 @@
                         const context = ctx();
                         if (context.saveSettingsDebounced) context.saveSettingsDebounced();
                     }
+
+                    // Always save ST settings when order changes
+                    if (changed || extensionOrderChanged) {
+                        const c2 = ctx();
+                        if (c2.saveSettingsDebounced) c2.saveSettingsDebounced();
+                    }
                 }
             }
         } catch (e) {
             console.warn('[PF] syncPromptOrder error:', e);
         }
+    }
+
+    /* ─── Reorder ST's prompt_order entries to match folder ordering ─── */
+    function reorderPromptOrderEntries(pm, orderedIds) {
+        try {
+            if (!pm.serviceSettings || !pm.serviceSettings.prompt_order) return;
+            const promptOrder = pm.serviceSettings.prompt_order;
+            if (!Array.isArray(promptOrder) || promptOrder.length === 0) return;
+
+            // ST prompt_order can be:
+            // 1) Flat array of {identifier, enabled} objects
+            // 2) Array with objects like {character_id, order: [{identifier, enabled}]}
+            const firstEntry = promptOrder[0];
+
+            if (firstEntry && typeof firstEntry === 'object' && 'order' in firstEntry) {
+                // Nested structure: [{character_id, order: [...]}]
+                for (const entry of promptOrder) {
+                    if (entry && Array.isArray(entry.order)) {
+                        reorderFlatOrderArray(entry.order, orderedIds);
+                    }
+                }
+            } else if (firstEntry && typeof firstEntry === 'object' && 'identifier' in firstEntry) {
+                // Flat structure: [{identifier, enabled}]
+                reorderFlatOrderArray(promptOrder, orderedIds);
+            }
+
+            console.log('[PF] prompt_order reordered to match folder order');
+        } catch (e) {
+            console.warn('[PF] reorderPromptOrderEntries error:', e);
+        }
+    }
+
+    function reorderFlatOrderArray(orderArr, orderedIds) {
+        if (!Array.isArray(orderArr) || orderArr.length === 0) return;
+        const entryMap = {};
+        orderArr.forEach(e => { if (e && e.identifier) entryMap[e.identifier] = e; });
+
+        const reordered = [];
+        const used = new Set();
+        for (const id of orderedIds) {
+            if (entryMap[id]) { reordered.push(entryMap[id]); used.add(id); }
+        }
+        // Append remaining entries that aren't in orderedIds
+        for (const e of orderArr) {
+            if (e && e.identifier && !used.has(e.identifier)) reordered.push(e);
+            else if (e && !e.identifier) reordered.push(e); // keep entries without identifier
+        }
+
+        // Replace in-place
+        orderArr.length = 0;
+        reordered.forEach(e => orderArr.push(e));
     }
 
     function _doRebuild(list) {
@@ -610,6 +670,16 @@
         inner.querySelector('.pf-popup-cancel').addEventListener('click', () => overlay.remove());
     }
 
+    /* ─── Alert Popup (확인 버튼만) ─── */
+    function showAlertPopup(msg) {
+        const inner = document.createElement('div');
+        inner.className = 'pf-modal-inner';
+        inner.innerHTML = `<div class="pf-popup-title">✅ 알림</div><div class="pf-confirm-msg">${msg}</div>
+            <div class="pf-popup-actions"><button class="pf-btn menu_button pf-popup-ok">확인</button></div>`;
+        const overlay = createModalOverlay(inner);
+        inner.querySelector('.pf-popup-ok').addEventListener('click', () => overlay.remove());
+    }
+
     /* ─── Bulk Edit Popup ─── */
     function showBulkEditPopup() {
         const list = getListContainer();
@@ -665,7 +735,7 @@
         const presetNames = Object.keys(allPresets).filter(p => p !== workingPreset);
 
         if (presetNames.length === 0) {
-            showConfirmPopup('가져올 다른 프리셋이 없습니다.', () => { });
+            showAlertPopup('가져올 다른 프리셋이 없습니다.');
             return;
         }
 
@@ -681,50 +751,86 @@
                 <label>가져올 프리셋:</label>
                 <select class="pf-import-select text_pole">${options}</select>
             </div>
+            <div class="pf-popup-field" style="margin-top:8px;">
+                <label class="pf-select-all-label"><input type="checkbox" class="pf-import-order-check"> 폴더 순서도 가져오기</label>
+            </div>
             <div class="pf-popup-field" style="font-size:12px;color:#aaa;margin-top:10px;line-height:1.4;">
-                현재 폴더 설정에 선택한 프리셋의 폴더 구조와<br>프롬프트 할당 정보가 추가/병합됩니다.<br>
-                (프롬프트 내부 ID 기반)
+                <span class="pf-import-desc">현재 프롬프트 구조를 유지한 채<br>폴더와 할당 정보만 가져옵니다.</span>
             </div>
             <div class="pf-popup-actions">
                 <button class="pf-btn menu_button pf-popup-ok">가져오기</button>
                 <button class="pf-btn menu_button pf-popup-cancel">취소</button>
             </div>`;
 
+        const orderCheck = inner.querySelector('.pf-import-order-check');
+        const desc = inner.querySelector('.pf-import-desc');
+        orderCheck.addEventListener('change', () => {
+            desc.innerHTML = orderCheck.checked
+                ? '소스 프리셋의 폴더 순서와 프롬프트 순서를<br>그대로 가져와 현재 순서를 덮어씁니다.'
+                : '현재 프롬프트 구조를 유지한 채<br>폴더와 할당 정보만 가져옵니다.';
+        });
+
         const overlay = createModalOverlay(inner);
         inner.querySelector('.pf-popup-ok').addEventListener('click', () => {
             const presetName = inner.querySelector('.pf-import-select').value;
             if (presetName && allPresets[presetName]) {
-                importSettingsFromPreset(allPresets[presetName]);
+                const importOrder = orderCheck.checked;
+                importSettingsFromPreset(allPresets[presetName], importOrder);
                 overlay.remove();
-                showConfirmPopup('폴더 설정을 성공적으로 가져왔습니다.', () => { });
+                showAlertPopup('폴더 설정을 성공적으로 가져왔습니다.');
             }
         });
         inner.querySelector('.pf-popup-cancel').addEventListener('click', () => overlay.remove());
     }
 
-    function importSettingsFromPreset(sourceData) {
+    function importSettingsFromPreset(sourceData, importOrder) {
         if (!sourceData || !sourceData.folders) return;
         const d = getPresetData();
 
+        // ★ Backup existing folder orders when NOT importing order
+        const savedOrders = {};
+        if (!importOrder) {
+            d.folders.forEach(f => { savedOrders[f.id] = f.order; });
+        }
+
         const folderIdMap = {};
 
-        sourceData.folders.forEach(srcFolder => {
+        // Only sort by source order when importing order; otherwise use array order
+        const srcFolders = importOrder
+            ? [...sourceData.folders].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            : sourceData.folders;
+
+        srcFolders.forEach(srcFolder => {
             let existing = d.folders.find(f => f.name === srcFolder.name);
             if (existing) {
                 folderIdMap[srcFolder.id] = existing.id;
+                if (importOrder) {
+                    existing.order = srcFolder.order ?? existing.order;
+                }
             } else {
                 const newId = 'pf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
                 d.folders.push({
                     id: newId,
                     name: srcFolder.name,
                     collapsed: srcFolder.collapsed,
-                    order: d.folders.length,
+                    order: importOrder ? (srcFolder.order ?? d.folders.length) : d.folders.length,
                     bgColor: srcFolder.bgColor || '',
                     textColor: srcFolder.textColor || ''
                 });
                 folderIdMap[srcFolder.id] = newId;
             }
         });
+
+        if (importOrder) {
+            // Re-normalize order values to be sequential
+            const sorted = [...d.folders].sort((a, b) => a.order - b.order);
+            sorted.forEach((f, i) => f.order = i);
+        } else {
+            // ★ Restore backed-up orders for existing folders
+            d.folders.forEach(f => {
+                if (savedOrders[f.id] !== undefined) f.order = savedOrders[f.id];
+            });
+        }
 
         if (sourceData.assignments) {
             Object.keys(sourceData.assignments).forEach(identifier => {
@@ -736,7 +842,7 @@
             });
         }
 
-        if (sourceData.promptOrder && sourceData.promptOrder.length > 0) {
+        if (importOrder && sourceData.promptOrder && sourceData.promptOrder.length > 0) {
             d.promptOrder = [...sourceData.promptOrder];
 
             // Reorder the DOM explicitly here to match sourceData.promptOrder
@@ -763,7 +869,6 @@
         }
 
         markDirty();
-        persistNow(); // auto-save the imported settings
         rebuildFolderUI();
     }
 
