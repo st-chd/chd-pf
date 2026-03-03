@@ -54,28 +54,25 @@
     white-space: nowrap;
 }
 
-/* ─── 폴더 헤더 (Folder Header) ─── */
+/* ─── 폴더 헤더 (경량 버전 — 제목만) ─── */
 .pf-folder-header {
-    display: grid;
-    grid-template-columns: auto 1fr auto auto auto auto auto;
+    display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 10px;
+    padding: 4px 10px;
     margin: 2px 0;
-    border-radius: 5px;
+    border-radius: 4px;
     background: var(--SmartThemeBlurTintColor, rgba(60, 60, 80, 0.5));
-    border: 1px solid var(--SmartThemeBorderColor, #555);
+    border-left: 3px solid var(--SmartThemeQuoteColor, #7b8dff);
     cursor: pointer;
     user-select: none;
-    transition: background 0.2s, border-color 0.2s;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 12px;
     grid-column: 1 / -1;
 }
 
 .pf-folder-header:hover {
     background: var(--SmartThemeChatTintColor, rgba(80, 80, 110, 0.6));
-    border-color: var(--SmartThemeQuoteColor, #888);
 }
 
 .pf-arrow {
@@ -111,16 +108,16 @@
     opacity: 1;
 }
 
-.pf-action-btn-always {
+.pf-folder-edit-btn {
     cursor: pointer;
-    font-size: 14px;
-    padding: 0 2px;
-    opacity: 0.6;
+    font-size: 12px;
+    opacity: 0.4;
     transition: opacity 0.15s;
+    margin-left: auto;
     flex-shrink: 0;
 }
 
-.pf-action-btn-always:hover {
+.pf-folder-edit-btn:hover {
     opacity: 1;
 }
 
@@ -395,47 +392,9 @@
     font-style: italic;
 }
 
-/* ─── 폴더 드래그 앤 드롭 (Folder DnD) ─── */
-.pf-folder-header[draggable="true"] {
-    cursor: grab;
-}
-
-.pf-folder-header.pf-dragging {
-    opacity: 0.4 !important;
-    cursor: grabbing;
-}
-
-.pf-folder-header.pf-drag-over-top {
-    border-top: 3px solid var(--SmartThemeQuoteColor, #7b8dff) !important;
-}
-
-.pf-folder-header.pf-drag-over-bottom {
-    border-bottom: 3px solid var(--SmartThemeQuoteColor, #7b8dff) !important;
-}
-
-[data-pf-folder] {
-    transition: none;
-}
-
 /* ─── ST 기본 프롬프트 드래그 (SortableJS) 최적화 ─── */
 .sortable-ghost,
 .sortable-drag {
     pointer-events: none !important;
     opacity: 0.6 !important;
-}
-
-/* ─── 드래그 중 폴더 이름 표시 (DOM 추가 없이 CSS ::before로 표시) ─── */
-[data-pf-drag-label]::before {
-    content: attr(data-pf-drag-label);
-    display: block;
-    padding: 2px 10px;
-    margin: 0 0 1px 0;
-    font-size: 11px;
-    font-weight: bold;
-    color: var(--SmartThemeBodyColor, #ccc);
-    background: rgba(255, 255, 255, 0.06);
-    border-left: 3px solid var(--SmartThemeQuoteColor, #7b8dff);
-    border-radius: 2px;
-    pointer-events: none;
-    opacity: 0.7;
 }

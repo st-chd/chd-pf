@@ -246,6 +246,12 @@
         return el ? el.textContent.trim() : (row.getAttribute('data-pm-identifier') || '?');
     }
 
+    /* ─── CSS 셀렉터 이스케이프 (특수문자/정규식 포함 식별자 안전 처리) ─── */
+    function escapeCSS(str) {
+        if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(str);
+        return str.replace(/([^\w-])/g, '\\$1');
+    }
+
     /* ─── 모달 오버레이 ─── */
     function createModalOverlay(innerEl) {
         document.querySelectorAll('.pf-overlay').forEach(el => el.remove());
@@ -275,8 +281,20 @@
     }
 
     /* ─── UI 생성 (Build UI) ─── */
+    let _rebuildCount = 0;
+    let _rebuildResetTimer = null;
+
     function rebuildFolderUI() {
         if (isRebuilding) return;
+
+        // ★ 무한 리빌드 방지: 1초 내 10회 초과 시 중단
+        _rebuildCount++;
+        clearTimeout(_rebuildResetTimer);
+        _rebuildResetTimer = setTimeout(() => { _rebuildCount = 0; }, 1000);
+        if (_rebuildCount > 10) {
+            console.warn('[PF] 무한 리빌드 감지, 중단');
+            return;
+        }
 
         // 중복 호출 방지를 위한 디바운스 (여러 번의 Mutation이 발생해도 1번만 실행)
         clearTimeout(rebuildTimeout);
@@ -289,8 +307,12 @@
             searchHasFocus = si && (document.activeElement === si);
             const cursorPos = searchHasFocus ? si.selectionStart : -1;
 
-            _doRebuild(list);
-            syncPromptOrder(list);
+            try {
+                _doRebuild(list);
+                syncPromptOrder(list);
+            } catch (e) {
+                console.error('[PF] _doRebuild error:', e);
+            }
             isRebuilding = false;
 
             if (searchHasFocus) {
@@ -535,7 +557,7 @@
         // 무한 루프 방지: 현재 DOM에 존재하는 프롬프트 ID 목록을 해시 형태로 저장
         list._pfHash = Array.from(list.querySelectorAll('[data-pm-identifier]'))
             .map(r => r.getAttribute('data-pm-identifier'))
-            .filter(Boolean).join('|');
+            .filter(Boolean).join('\x00');
 
         if (searchQuery) applySearchFilter(rows);
 
@@ -586,7 +608,7 @@
         b.addEventListener('click', fn); return b;
     }
 
-    /* ─── 폴더 헤더 ─── */
+    /* ─── 폴더 헤더 (경량 버전 — 제목만 표시) ─── */
     function createFolderHeader(folder) {
         const header = document.createElement('div');
         header.className = 'pf-folder-header pf-injected';
@@ -602,96 +624,19 @@
         nameSpan.className = 'pf-folder-name';
         nameSpan.textContent = folder.name;
 
-        const d = getPresetData();
-        const promptIds = Object.entries(d.assignments).filter(([, v]) => v === folder.id).map(([k]) => k);
-        const total = promptIds.length;
-        const list = getListContainer();
-        let active = 0;
-        if (list) {
-            for (const pid of promptIds) {
-                const row = list.querySelector(`[data-pm-identifier="${pid}"]`);
-                if (!row) continue;
-                const toggle = row.querySelector('input[type="checkbox"]');
-                if (toggle && toggle.checked) { active++; continue; }
-                if (row.querySelector('.fa-toggle-on, .toggle-on')) { active++; }
-            }
-        }
-        const countSpan = document.createElement('span');
-        countSpan.className = 'pf-count';
-        countSpan.textContent = `(${active}/${total})`;
-        countSpan.title = `${active}개 활성화 / ${total}개 전체`;
-
-        // ⚡ 토글
-        const toggleBtn = document.createElement('span');
-        toggleBtn.className = 'pf-action-btn-always';
-        toggleBtn.textContent = '⚡';
-        toggleBtn.title = '폴더 전체 토글';
-        toggleBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleAllPromptsInFolder(folder.id); });
-
-        // ▲▼ 이동
-        const upBtn = document.createElement('span');
-        upBtn.className = 'pf-action-btn-always';
-        upBtn.textContent = '▲';
-        upBtn.title = '위로 이동';
-        upBtn.addEventListener('click', (e) => { e.stopPropagation(); moveFolderUp(folder.id); });
-
-        const downBtn = document.createElement('span');
-        downBtn.className = 'pf-action-btn-always';
-        downBtn.textContent = '▼';
-        downBtn.title = '아래로 이동';
-        downBtn.addEventListener('click', (e) => { e.stopPropagation(); moveFolderDown(folder.id); });
-
-        // ✏️ 편집 (삭제도 여기 안에)
+        // ✏️ 편집 (축소된 버튼 — 호버/터치 시만 표시)
         const editBtn = document.createElement('span');
-        editBtn.className = 'pf-action-btn-always';
+        editBtn.className = 'pf-folder-edit-btn';
         editBtn.textContent = '✏️';
         editBtn.title = '편집';
         editBtn.addEventListener('click', (e) => { e.stopPropagation(); showFolderEditPopup(folder); });
 
-        [arrow, nameSpan, countSpan, toggleBtn, upBtn, downBtn, editBtn].forEach(el => header.appendChild(el));
+        header.appendChild(arrow);
+        header.appendChild(nameSpan);
+        header.appendChild(editBtn);
 
         // 클릭 → 접기/펼치기
         header.addEventListener('click', () => { toggleCollapse(folder.id); rebuildFolderUI(); });
-
-        // ★ 폴더 DnD 기능 (드래그 앤 드롭)
-        header.setAttribute('draggable', 'true');
-        header.addEventListener('dragstart', (e) => {
-            e.stopPropagation();
-            e.dataTransfer.setData('text/pf-folder-id', folder.id);
-            e.dataTransfer.effectAllowed = 'move';
-            header.classList.add('pf-dragging');
-        });
-        header.addEventListener('dragend', () => {
-            header.classList.remove('pf-dragging');
-            document.querySelectorAll('.pf-drag-over-top, .pf-drag-over-bottom').forEach(el => {
-                el.classList.remove('pf-drag-over-top', 'pf-drag-over-bottom');
-            });
-        });
-        header.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (!e.dataTransfer.types.includes('text/pf-folder-id')) return;
-            e.dataTransfer.dropEffect = 'move';
-            // 마우스 위치에 따라 위쪽 혹은 아래쪽 표시기 표시
-            const rect = header.getBoundingClientRect();
-            const midY = rect.top + rect.height / 2;
-            header.classList.toggle('pf-drag-over-top', e.clientY < midY);
-            header.classList.toggle('pf-drag-over-bottom', e.clientY >= midY);
-        });
-        header.addEventListener('dragleave', () => {
-            header.classList.remove('pf-drag-over-top', 'pf-drag-over-bottom');
-        });
-        header.addEventListener('drop', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const rect = header.getBoundingClientRect();
-            const before = e.clientY < rect.top + rect.height / 2;
-            header.classList.remove('pf-drag-over-top', 'pf-drag-over-bottom');
-            const srcFolderId = e.dataTransfer.getData('text/pf-folder-id');
-            if (srcFolderId && srcFolderId !== folder.id) {
-                moveFolderToPosition(srcFolderId, folder.id, before);
-            }
-        });
 
         return header;
     }
@@ -702,7 +647,12 @@
         inner.className = 'pf-modal-inner';
         inner.innerHTML = `
             <div class="pf-popup-title" style="display:flex;align-items:center;justify-content:center;gap:8px">✏️ 폴더 편집<button class="pf-btn menu_button pf-delete-folder" style="color:#ff6b6b;font-size:11px;padding:2px 6px!important;margin-left:auto">🗑️ 삭제</button></div>
-            <div class="pf-popup-field"><label>이름:</label><input type="text" class="pf-edit-name text_pole" value="${folder.name}"></div>
+            <div class="pf-popup-field"><label>이름:</label><input type="text" class="pf-edit-name text_pole" value="${folder.name.replace(/"/g, '&quot;')}"></div>
+            <div class="pf-popup-field" style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap;">
+                <button class="pf-btn menu_button pf-move-up">▲ 위로</button>
+                <button class="pf-btn menu_button pf-move-down">▼ 아래로</button>
+                <button class="pf-btn menu_button pf-toggle-all">⚡ 전체 토글</button>
+            </div>
             <div class="pf-color-row"><label>배경색:</label><input type="color" class="pf-cbg" value="${folder.bgColor || '#3a3a3a'}"><input type="text" class="pf-cbg-hex text_pole" placeholder="(UI 설정 따름)" value="${folder.bgColor || ''}"><button class="pf-btn menu_button pf-reset-bg" style="font-size:11px;padding:2px 6px!important" title="UI 설정 사용">↺</button></div>
             <div class="pf-color-row"><label>글자색:</label><input type="color" class="pf-ctx" value="${folder.textColor || '#cccccc'}"><input type="text" class="pf-ctx-hex text_pole" placeholder="(UI 설정 따름)" value="${folder.textColor || ''}"><button class="pf-btn menu_button pf-reset-tx" style="font-size:11px;padding:2px 6px!important" title="UI 설정 사용">↺</button></div>
             <div class="pf-popup-actions">
@@ -718,6 +668,10 @@
         txH.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(txH.value)) txP.value = txH.value; });
         inner.querySelector('.pf-reset-bg').addEventListener('click', () => { bgP.value = '#3a3a3a'; bgH.value = ''; });
         inner.querySelector('.pf-reset-tx').addEventListener('click', () => { txP.value = '#cccccc'; txH.value = ''; });
+        // ▲▼ 이동 + ⚡ 토글
+        inner.querySelector('.pf-move-up').addEventListener('click', () => { moveFolderUp(folder.id); overlay.remove(); });
+        inner.querySelector('.pf-move-down').addEventListener('click', () => { moveFolderDown(folder.id); overlay.remove(); });
+        inner.querySelector('.pf-toggle-all').addEventListener('click', () => { toggleAllPromptsInFolder(folder.id); overlay.remove(); });
         inner.querySelector('.pf-popup-ok').addEventListener('click', () => {
             const n = inner.querySelector('.pf-edit-name').value.trim();
             if (n) renameFolder(folder.id, n);
@@ -1320,7 +1274,7 @@
         // 행과 현재 토글 상태 수집
         const rowData = [];
         for (const pid of ids) {
-            const row = list.querySelector(`[data-pm-identifier="${pid}"]`);
+            const row = list.querySelector(`[data-pm-identifier="${escapeCSS(pid)}"]`);
             if (!row) continue;
             const toggle = row.querySelector('input[type="checkbox"], .toggle-prompt, [data-pm-toggle], .fa-toggle-on, .fa-toggle-off');
             if (!toggle) continue;
@@ -1456,88 +1410,9 @@
         }
     }
 
-    /* ─── [드래그 렉 해결] 드래그 중 폴더 헤더 DOM 제거 + Observer 비활성화 ─── */
-    // SortableJS는 `draggable` 필터와 관계없이 컨테이너의 "모든 직접 자식"을 순회하며
-    // 위치 계산(getBoundingClientRect)+ 내부 캐시 갱신을 수행합니다.
-    // 근본적 해결책: 프롬프트를 드래그하는 순간, 폴더 헤더를 DOM에서 완전히 제거하여
-    // SortableJS가 보는 DOM을 실리태번 순정 상태와 동일하게 만듭니다.
-    function setupDragOptimization(list) {
-        if (!list || list._pfDragOpt) return;
-        list._pfDragOpt = true;
-
-        list.addEventListener('pointerdown', (e) => {
-            // 프롬프트 행을 눌렀을 때만 (폴더 헤더나 도구 모음은 제외)
-            if (!e.target.closest('[data-pm-identifier]')) return;
-
-            const observerTarget = document.getElementById('completion_prompt_manager')
-                || document.querySelector('.completion_prompt_manager');
-
-            // ★ 1. Observer 완전 차단 (드래그 도중 확장 작업 0%)
-            if (observer) observer.disconnect();
-
-            // ★ 2. 폴더 헤더를 제거하기 전에: 각 폴더의 첫 번째 프롬프트에 폴더 이름을 마킹
-            //    CSS ::before 로 폴더 이름을 표시하므로 DOM 요소 추가 0개 = SortableJS 영향 없음!
-            const d = getPresetData();
-            const folderNameMap = {};
-            d.folders.forEach(f => { folderNameMap[f.id] = f.name; });
-
-            // 각 폴더의 첫 번째 프롬프트에 라벨 표시
-            const seenFolders = new Set();
-            list.querySelectorAll('[data-pf-folder]').forEach(el => {
-                const fId = el.getAttribute('data-pf-folder');
-                if (fId && !seenFolders.has(fId) && folderNameMap[fId]) {
-                    el.setAttribute('data-pf-drag-label', '📁 ' + folderNameMap[fId]);
-                    seenFolders.add(fId);
-                }
-            });
-
-            // ★ 3. 폴더 헤더/미분류 헤더를 DOM에서 제거 (툴바는 유지)
-            //    SortableJS가 보는 자식 요소 = 프롬프트 행만 남음 = 실리태번 순정과 동일!
-            const removedHeaders = [];
-            list.querySelectorAll('.pf-injected:not(.pf-toolbar)').forEach(el => {
-                removedHeaders.push(el);
-                el.remove();
-            });
-
-            // ★ 4. 접혀있던(숨겨져있던) 프롬프트를 일시적으로 표시
-            list.querySelectorAll('[data-pf-folder]').forEach(el => {
-                if (el.style.display === 'none') {
-                    el.style.display = '';
-                    el.setAttribute('data-pf-was-hidden', '1');
-                }
-            });
-
-            console.log('[PF] 드래그 시작: 폴더 헤더 제거 + ' + seenFolders.size + '개 폴더 라벨 표시');
-
-            const restore = () => {
-                document.removeEventListener('pointerup', restore);
-                document.removeEventListener('pointercancel', restore);
-                // SortableJS가 DOM 조작을 마칠 때까지 100ms 대기 후 복원
-                setTimeout(() => {
-                    if (observerTarget && observer) {
-                        observer.observe(observerTarget, { childList: true, subtree: true });
-                    }
-                    // 드래그 완료 후 전체 UI 재구성 (폴더 헤더 복원 포함)
-                    wasDragging = true;
-                    needsSTSync = true;
-                    rebuildFolderUI();
-                    console.log('[PF] 드래그 종료: UI 복원 완료');
-                }, 100);
-            };
-
-            document.addEventListener('pointerup', restore, { once: true });
-            document.addEventListener('pointercancel', restore, { once: true });
-
-            // 안전장치: 10초 후 강제 복원
-            setTimeout(() => {
-                if (observerTarget && observer) {
-                    try { observer.observe(observerTarget, { childList: true, subtree: true }); } catch (e) { }
-                }
-            }, 10000);
-        }, { passive: true });
-
-        console.log('[PF] ✅ 드래그 최적화 설정 완료');
-    }
+    /* ─── [드래그 렉 해결] setupDragOptimization 제거됨 ─── */
+    // 폴더 헤더를 경량화(3개 요소, flex)하여 SortableJS 성능 영향 최소화.
+    // 더 이상 pointerdown에서 DOM 제거/복원을 하지 않음.
 
     /* ─── MutationObserver 관찰자 ─── */
     function setupObserver() {
@@ -1581,7 +1456,7 @@
                 // 이 무거운 O(N) 작업은 이제 '실제 프롬프트 추가/삭제' 시에만 실행됩니다.
                 const currentHash = Array.from(list.querySelectorAll('[data-pm-identifier]'))
                     .map(r => r.getAttribute('data-pm-identifier'))
-                    .filter(Boolean).join('|');
+                    .filter(Boolean).join('\x00');
 
                 // 해시가 같으면 (우리가 DOM을 조작해서 발생한 이벤트면) 무시
                 if (list._pfHash === currentHash) {
@@ -1671,13 +1546,12 @@
                 checkPresetChange(); // 초기 로드 진입점
                 setupObserver();
                 rebuildFolderUI();
-                // [드래그 렉 해결] SortableJS 패치 및 드래그 최적화 설정
+                // [드래그 렉 해결] SortableJS 패치
                 // ST가 SortableJS를 아직 초기화하지 않았을 수 있으므로 지연 호출
                 setTimeout(() => {
                     const l = getListContainer();
                     if (l) {
                         patchSortable(l);
-                        setupDragOptimization(l);
                     }
                 }, 500);
                 // 2차 시도: ST가 늦게 SortableJS를 초기화하는 경우 대비
