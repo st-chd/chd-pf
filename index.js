@@ -1170,25 +1170,6 @@
             if (list && !list.querySelector('.pf-injected') && !isRebuilding) rebuildFolderUI();
         });
         observer.observe(target, { childList: true, subtree: true });
-
-        const list = getListContainer();
-        if (list && !list._pfDnD) {
-            list._pfDnD = true;
-            // 네이티브 프롬프트 드래그 앤 드롭으로 인한 ST 내부 배열 손상을 방지합니다.
-            list.addEventListener('pointerup', () => {
-                setTimeout(() => {
-                    if (isRebuilding) return;
-                    const rows = getPromptRows(list);
-                    const ids = rows.map(r => r.getAttribute('data-pm-identifier')).filter(Boolean);
-                    const d = getPresetData();
-                    if (d.promptOrder && d.promptOrder.length > 0 && d.promptOrder.join(',') !== ids.join(',')) {
-                        console.log('[PF] 네이티브 프롬프트 드래그 감지됨. 내부 배열 수정 중...');
-                        needsSTSync = true;
-                        syncPromptOrder(list);
-                    }
-                }, 100);
-            });
-        }
     }
 
     /* ─── 슬래시 명령어 (Slash Commands) ─── */
