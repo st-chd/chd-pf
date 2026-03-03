@@ -183,16 +183,22 @@
         overlay.className = 'pf-overlay';
         overlay.appendChild(innerEl);
 
-        // 모달 클릭 시 ST의 외부 클릭 방지(패널 닫힘) 우회하기
-        overlay.addEventListener('mousedown', (e) => {
+        // 모달 클릭 시 ST의 외부 클릭 방지(패널 닫힘) 우회하기 (모바일 터치 이벤트 포함)
+        const stopProp = (e) => e.stopPropagation();
+        const startHandler = (e) => {
             e.stopPropagation();
             if (e.target === overlay) {
                 // 이벤트 타겟이 떨어진 후 bubbling되는 것을 막기 위해 살짝 지연해서 없앱니다.
                 setTimeout(() => overlay.remove(), 0);
             }
-        });
-        overlay.addEventListener('mouseup', (e) => e.stopPropagation());
-        overlay.addEventListener('click', (e) => e.stopPropagation());
+        };
+
+        overlay.addEventListener('mousedown', startHandler);
+        overlay.addEventListener('touchstart', startHandler, { passive: false });
+        overlay.addEventListener('mouseup', stopProp);
+        overlay.addEventListener('touchend', stopProp);
+        overlay.addEventListener('touchcancel', stopProp);
+        overlay.addEventListener('click', stopProp);
 
         document.body.appendChild(overlay);
         return overlay;
@@ -680,9 +686,19 @@
         popup.style.zIndex = '99999';
 
         setTimeout(() => {
-            const h = (e) => { if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('click', h, true); } };
+            const h = (e) => { if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('click', h, true); document.removeEventListener('touchend', h, true); } };
             document.addEventListener('click', h, true);
+            document.addEventListener('touchend', h, true);
         }, 50);
+
+        // 모바일 패널 닫힘 방지
+        const stopProp = (e) => e.stopPropagation();
+        popup.addEventListener('mousedown', stopProp);
+        popup.addEventListener('touchstart', stopProp, { passive: false });
+        popup.addEventListener('mouseup', stopProp);
+        popup.addEventListener('touchend', stopProp);
+        popup.addEventListener('touchcancel', stopProp);
+        popup.addEventListener('click', stopProp);
     }
 
     /* ─── 폴더 추가 팝업 ─── */
