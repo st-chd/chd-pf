@@ -15,6 +15,8 @@
     let searchQuery = '';
     let searchHasFocus = false;
     let dirty = false;
+    let isImporting = false;
+    let needsSTSync = false; // Only true when user explicitly reorders folders
 
     /* ─── Settings helpers ─── */
     function ctx() { return SillyTavern.getContext(); }
@@ -122,7 +124,7 @@
         sorted.splice(idx, 1);
         sorted.splice(idx - 1, 0, d.folders.find(f => f.id === folderId));
         sorted.forEach((f, i) => f.order = i);
-        markDirty(); rebuildFolderUI();
+        markDirty(); needsSTSync = true; rebuildFolderUI();
     }
 
     function moveFolderDown(folderId) {
@@ -134,7 +136,7 @@
         sorted.splice(idx, 1);
         sorted.splice(idx + 1, 0, d.folders.find(f => f.id === folderId));
         sorted.forEach((f, i) => f.order = i);
-        markDirty(); rebuildFolderUI();
+        markDirty(); needsSTSync = true; rebuildFolderUI();
     }
 
     function assignPrompt(identifier, folderId) {
@@ -187,12 +189,39 @@
     }
 
     /* ─── Sync prompt order to ST's internal data after DOM reorder ─── */
-    function syncPromptOrder(list) {
+    function getServiceSettings() {
+        // Try multiple paths to find the OpenAI/service settings with prompt_order
         try {
             const context = ctx();
-            if (!context || !context.promptManager) return;
-            const pm = context.promptManager;
-            // Get the current DOM order of prompt identifiers
+            // Path 1: context.promptManager
+            if (context.promptManager && context.promptManager.serviceSettings) {
+                return context.promptManager.serviceSettings;
+            }
+            // Path 2: oai_settings global
+            if (window.oai_settings) {
+                return window.oai_settings;
+            }
+            // Path 3: context.openai_settings
+            if (context.openai_settings) {
+                return context.openai_settings;
+            }
+            // Path 4: Search through context for any object with prompt_order
+            for (const key of Object.keys(context)) {
+                const val = context[key];
+                if (val && typeof val === 'object' && !Array.isArray(val) && 'prompt_order' in val) {
+                    console.log('[PF] found prompt_order in context.' + key);
+                    return val;
+                }
+            }
+            console.warn('[PF] could not find serviceSettings. Context keys:', Object.keys(context).join(', '));
+        } catch (e) {
+            console.warn('[PF] getServiceSettings error:', e);
+        }
+        return null;
+    }
+
+    function syncPromptOrder(list) {
+        try {
             const rows = getPromptRows(list);
             const orderedIds = rows
                 .filter(r => r.style.display !== 'none' || true)
@@ -208,54 +237,43 @@
                 extensionOrderChanged = true;
             }
 
-            // Access the prompt manager's internal list and reorder
-            if (pm.serviceSettings && pm.serviceSettings.prompts) {
-                const prompts = pm.serviceSettings.prompts;
-                const promptMap = {};
-                prompts.forEach(p => { promptMap[p.identifier] = p; });
+            // ★ Only modify ST's internal data when user explicitly reordered folders
+            if (needsSTSync && !isImporting) {
+                const ss = getServiceSettings();
+                if (ss) {
+                    // Reorder prompts array
+                    if (ss.prompts) {
+                        const prompts = ss.prompts;
+                        const promptMap = {};
+                        prompts.forEach(p => { promptMap[p.identifier] = p; });
 
-                // Build reordered list: ordered IDs first, then any remaining
-                const reordered = [];
-                const used = new Set();
-                for (const id of orderedIds) {
-                    if (promptMap[id]) { reordered.push(promptMap[id]); used.add(id); }
-                }
-                for (const p of prompts) {
-                    if (!used.has(p.identifier)) reordered.push(p);
-                }
+                        const reordered = [];
+                        const used = new Set();
+                        for (const id of orderedIds) {
+                            if (promptMap[id]) { reordered.push(promptMap[id]); used.add(id); }
+                        }
+                        for (const p of prompts) {
+                            if (!used.has(p.identifier)) reordered.push(p);
+                        }
 
-                // Check if order actually changed
-                let changed = false;
-                if (prompts.length === reordered.length) {
-                    for (let i = 0; i < prompts.length; i++) {
-                        if (prompts[i].identifier !== reordered[i].identifier) { changed = true; break; }
-                    }
-                } else { changed = true; }
+                        let changed = false;
+                        for (let i = 0; i < prompts.length; i++) {
+                            if (prompts[i]?.identifier !== reordered[i]?.identifier) { changed = true; break; }
+                        }
 
-                if (changed || extensionOrderChanged) {
-                    if (changed) {
-                        // Replace in-place
-                        prompts.length = 0;
-                        reordered.forEach(p => prompts.push(p));
-                    }
-
-                    // ★ Also reorder prompt_order (controls actual sending order in ST)
-                    reorderPromptOrderEntries(pm, orderedIds);
-
-                    // Flush folder and order settings immediately when drag-and-drop modifies order
-                    if (extensionOrderChanged) {
-                        persistNow();
-                    } else if (changed && typeof ctx === 'function') {
-                        const context = ctx();
-                        if (context.saveSettingsDebounced) context.saveSettingsDebounced();
+                        if (changed) {
+                            prompts.length = 0;
+                            reordered.forEach(p => prompts.push(p));
+                            console.log('[PF] prompts array reordered');
+                        }
                     }
 
-                    // Always save ST settings when order changes
-                    if (changed || extensionOrderChanged) {
-                        const c2 = ctx();
-                        if (c2.saveSettingsDebounced) c2.saveSettingsDebounced();
+                    // Reorder prompt_order in-memory
+                    if (ss.prompt_order) {
+                        reorderPromptOrderEntries(ss, orderedIds);
                     }
                 }
+                needsSTSync = false;
             }
         } catch (e) {
             console.warn('[PF] syncPromptOrder error:', e);
@@ -263,32 +281,57 @@
     }
 
     /* ─── Reorder ST's prompt_order entries to match folder ordering ─── */
-    function reorderPromptOrderEntries(pm, orderedIds) {
+    function reorderPromptOrderEntries(ss, orderedIds) {
         try {
-            if (!pm.serviceSettings || !pm.serviceSettings.prompt_order) return;
-            const promptOrder = pm.serviceSettings.prompt_order;
-            if (!Array.isArray(promptOrder) || promptOrder.length === 0) return;
+            if (!ss || !ss.prompt_order) {
+                console.warn('[PF] prompt_order not found');
+                return false;
+            }
+            const promptOrder = ss.prompt_order;
+            if (!Array.isArray(promptOrder) || promptOrder.length === 0) {
+                console.warn('[PF] prompt_order is empty or not array');
+                return false;
+            }
 
-            // ST prompt_order can be:
-            // 1) Flat array of {identifier, enabled} objects
-            // 2) Array with objects like {character_id, order: [{identifier, enabled}]}
+            console.log('[PF] prompt_order entries:', promptOrder.length,
+                'structure:', JSON.stringify(promptOrder.map(e => ({
+                    character_id: e.character_id,
+                    orderLen: e.order ? e.order.length : 0
+                }))));
+
+            let anyChanged = false;
             const firstEntry = promptOrder[0];
 
             if (firstEntry && typeof firstEntry === 'object' && 'order' in firstEntry) {
                 // Nested structure: [{character_id, order: [...]}]
                 for (const entry of promptOrder) {
                     if (entry && Array.isArray(entry.order)) {
+                        const before = entry.order.map(e => e.identifier).join(',');
                         reorderFlatOrderArray(entry.order, orderedIds);
+                        const after = entry.order.map(e => e.identifier).join(',');
+                        if (before !== after) {
+                            anyChanged = true;
+                            console.log(`[PF] character_id ${entry.character_id} order changed`);
+                        }
                     }
                 }
             } else if (firstEntry && typeof firstEntry === 'object' && 'identifier' in firstEntry) {
                 // Flat structure: [{identifier, enabled}]
+                const before = promptOrder.map(e => e.identifier).join(',');
                 reorderFlatOrderArray(promptOrder, orderedIds);
+                const after = promptOrder.map(e => e.identifier).join(',');
+                if (before !== after) anyChanged = true;
             }
 
-            console.log('[PF] prompt_order reordered to match folder order');
+            if (anyChanged) {
+                console.log('[PF] prompt_order reordered successfully');
+            } else {
+                console.log('[PF] prompt_order: no change needed');
+            }
+            return anyChanged;
         } catch (e) {
             console.warn('[PF] reorderPromptOrderEntries error:', e);
+            return false;
         }
     }
 
@@ -584,7 +627,7 @@
 
         const none = document.createElement('div');
         none.className = 'pf-picker-item' + (!cur ? ' pf-picker-selected' : '');
-        none.textContent = '❌ 미분류' + (!cur ? ' (현재)' : '');
+        none.textContent = '미분류' + (!cur ? ' (현재)' : '');
         none.addEventListener('click', () => { assignPrompt(identifier, null); popup.remove(); });
         popup.appendChild(none);
 
@@ -625,7 +668,7 @@
             const a = d.assignments[id];
             const fo = a ? d.folders.find(f => f.id === a) : null;
             const badge = fo ? `<span class="pf-badge">${fo.name}</span>` : '';
-            html += `<label class="pf-prompt-check" data-folder="${a || ''}"><input type="checkbox" value="${id}"> ${name} ${badge}</label>`;
+            html += `<label class="pf-prompt-check" data-folder="${a || ''}"><input type="checkbox" value="${id}"><span class="pf-prompt-name">${name}</span>${badge}</label>`;
         }
         // Build filter options
         let filterHTML = '<option value="__all__">전체</option><option value="">미분류</option>';
@@ -695,9 +738,9 @@
             const a = d.assignments[id];
             const fo = a ? d.folders.find(f => f.id === a) : null;
             const badge = fo ? `<span class="pf-badge">${fo.name}</span>` : '<span class="pf-badge pf-badge-none">미분류</span>';
-            plHTML += `<label class="pf-prompt-check" data-folder="${a || ''}"><input type="checkbox" value="${id}"> ${name} ${badge}</label>`;
+            plHTML += `<label class="pf-prompt-check" data-folder="${a || ''}"><input type="checkbox" value="${id}"><span class="pf-prompt-name">${name}</span>${badge}</label>`;
         }
-        let foHTML = '<option value="">❌ 미분류</option>';
+        let foHTML = '<option value="">미분류</option>';
         for (const f of [...d.folders].sort((a, b) => a.order - b.order)) foHTML += `<option value="${f.id}">📁 ${f.name}</option>`;
         // Filter options
         let filterHTML = '<option value="__all__">전체</option><option value="">미분류</option>';
@@ -751,11 +794,11 @@
                 <label>가져올 프리셋:</label>
                 <select class="pf-import-select text_pole">${options}</select>
             </div>
-            <div class="pf-popup-field" style="margin-top:8px;">
-                <label class="pf-select-all-label"><input type="checkbox" class="pf-import-order-check"> 폴더 순서도 가져오기</label>
+            <div class="pf-popup-field" style="margin-top:8px;display:flex;align-items:center;gap:6px;">
+                <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;"><input type="checkbox" class="pf-import-order-check"> 폴더/프롬프트 순서도 가져오기</label>
             </div>
             <div class="pf-popup-field" style="font-size:12px;color:#aaa;margin-top:10px;line-height:1.4;">
-                <span class="pf-import-desc">현재 프롬프트 구조를 유지한 채<br>폴더와 할당 정보만 가져옵니다.</span>
+                <span class="pf-import-desc">현재 프롬프트 순서를 유지한 채 폴더 구조만 가져옵니다.</span>
             </div>
             <div class="pf-popup-actions">
                 <button class="pf-btn menu_button pf-popup-ok">가져오기</button>
@@ -765,9 +808,9 @@
         const orderCheck = inner.querySelector('.pf-import-order-check');
         const desc = inner.querySelector('.pf-import-desc');
         orderCheck.addEventListener('change', () => {
-            desc.innerHTML = orderCheck.checked
-                ? '소스 프리셋의 폴더 순서와 프롬프트 순서를<br>그대로 가져와 현재 순서를 덮어씁니다.'
-                : '현재 프롬프트 구조를 유지한 채<br>폴더와 할당 정보만 가져옵니다.';
+            desc.textContent = orderCheck.checked
+                ? '소스 프리셋의 폴더 순서와 프롬프트 순서를 그대로 가져와 덮어씁니다.'
+                : '현재 프롬프트 순서를 유지한 채 폴더 구조만 가져옵니다.';
         });
 
         const overlay = createModalOverlay(inner);
@@ -787,6 +830,9 @@
         if (!sourceData || !sourceData.folders) return;
         const d = getPresetData();
 
+        console.log('[PF] IMPORT START, importOrder:', importOrder);
+        console.log('[PF] current folders:', d.folders.map(f => `${f.name}(order=${f.order})`).join(', '));
+
         // ★ Backup existing folder orders when NOT importing order
         const savedOrders = {};
         if (!importOrder) {
@@ -795,10 +841,14 @@
 
         const folderIdMap = {};
 
-        // Only sort by source order when importing order; otherwise use array order
-        const srcFolders = importOrder
-            ? [...sourceData.folders].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-            : sourceData.folders;
+        // ★ Always sort source folders by display order for correct new folder creation
+        const srcFolders = [...sourceData.folders].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+        // Track max existing order for appending new folders
+        const maxExistingOrder = d.folders.length > 0
+            ? Math.max(...d.folders.map(f => f.order)) + 1
+            : 0;
+        let nextNewOrder = maxExistingOrder;
 
         srcFolders.forEach(srcFolder => {
             let existing = d.folders.find(f => f.name === srcFolder.name);
@@ -813,25 +863,16 @@
                     id: newId,
                     name: srcFolder.name,
                     collapsed: srcFolder.collapsed,
-                    order: importOrder ? (srcFolder.order ?? d.folders.length) : d.folders.length,
+                    order: nextNewOrder,
                     bgColor: srcFolder.bgColor || '',
                     textColor: srcFolder.textColor || ''
                 });
+                nextNewOrder++;
                 folderIdMap[srcFolder.id] = newId;
             }
         });
 
-        if (importOrder) {
-            // Re-normalize order values to be sequential
-            const sorted = [...d.folders].sort((a, b) => a.order - b.order);
-            sorted.forEach((f, i) => f.order = i);
-        } else {
-            // ★ Restore backed-up orders for existing folders
-            d.folders.forEach(f => {
-                if (savedOrders[f.id] !== undefined) f.order = savedOrders[f.id];
-            });
-        }
-
+        // Apply assignments
         if (sourceData.assignments) {
             Object.keys(sourceData.assignments).forEach(identifier => {
                 const srcFolderId = sourceData.assignments[identifier];
@@ -842,34 +883,96 @@
             });
         }
 
-        if (importOrder && sourceData.promptOrder && sourceData.promptOrder.length > 0) {
-            d.promptOrder = [...sourceData.promptOrder];
+        if (importOrder) {
+            // ★ Use source's folder order
+            const sorted = [...d.folders].sort((a, b) => a.order - b.order);
+            sorted.forEach((f, i) => f.order = i);
+        } else {
+            // ★ Restore backed-up orders for existing folders
+            d.folders.forEach(f => {
+                if (savedOrders[f.id] !== undefined) f.order = savedOrders[f.id];
+            });
 
-            // Reorder the DOM explicitly here to match sourceData.promptOrder
+            // ★ Derive NEW folder order from current DOM prompt order
             const list = getListContainer();
             if (list) {
                 const rows = getPromptRows(list);
-                const orderMap = {};
-                sourceData.promptOrder.forEach((id, idx) => { orderMap[id] = idx; });
-
-                rows.sort((a, b) => {
-                    const idA = a.getAttribute('data-pm-identifier');
-                    const idB = b.getAttribute('data-pm-identifier');
-                    const pA = orderMap[idA] ?? 999999;
-                    const pB = orderMap[idB] ?? 999999;
-                    return pA - pB;
+                const firstAppearance = {};
+                rows.forEach((row, idx) => {
+                    const id = row.getAttribute('data-pm-identifier');
+                    const folderId = d.assignments[id];
+                    if (folderId && !(folderId in firstAppearance)) {
+                        firstAppearance[folderId] = idx;
+                    }
                 });
+                // Only reorder new folders (those without savedOrders) based on prompt position
+                d.folders.forEach(f => {
+                    if (savedOrders[f.id] === undefined && firstAppearance[f.id] !== undefined) {
+                        // New folder: set order based on where its first prompt appears
+                        f.order = 1000 + firstAppearance[f.id];
+                    }
+                });
+            }
+            // Re-normalize to sequential
+            const sorted = [...d.folders].sort((a, b) => a.order - b.order);
+            sorted.forEach((f, i) => f.order = i);
+        }
 
-                // Append rows to their parent based on new order
+        console.log('[PF] after order fix:', d.folders.map(f => `${f.name}(order=${f.order})`).join(', '));
+
+        markDirty();
+
+        // ★ When importing order, reorder DOM + ST data BEFORE rebuild
+        if (importOrder && sourceData.promptOrder && sourceData.promptOrder.length > 0) {
+            d.promptOrder = [...sourceData.promptOrder];
+
+            // Reorder DOM rows to match source prompt order
+            const list = getListContainer();
+            if (list) {
+                const rows = getPromptRows(list);
                 if (rows.length > 0) {
+                    const orderMap = {};
+                    sourceData.promptOrder.forEach((id, idx) => { orderMap[id] = idx; });
+                    const sortedRows = [...rows].sort((a, b) => {
+                        const pA = orderMap[a.getAttribute('data-pm-identifier')] ?? 999999;
+                        const pB = orderMap[b.getAttribute('data-pm-identifier')] ?? 999999;
+                        return pA - pB;
+                    });
                     const parent = rows[0].parentElement;
-                    rows.forEach(row => parent.appendChild(row));
+                    sortedRows.forEach(row => parent.appendChild(row));
                 }
+            }
+
+            // Also apply to ST's in-memory data
+            const ss = getServiceSettings();
+            if (ss) {
+                if (ss.prompts) {
+                    const promptMap = {};
+                    ss.prompts.forEach(p => { promptMap[p.identifier] = p; });
+                    const reordered = [];
+                    const used = new Set();
+                    for (const id of sourceData.promptOrder) {
+                        if (promptMap[id]) { reordered.push(promptMap[id]); used.add(id); }
+                    }
+                    for (const p of ss.prompts) {
+                        if (!used.has(p.identifier)) reordered.push(p);
+                    }
+                    ss.prompts.length = 0;
+                    reordered.forEach(p => ss.prompts.push(p));
+                }
+                if (ss.prompt_order) {
+                    reorderPromptOrderEntries(ss, sourceData.promptOrder);
+                }
+                console.log('[PF] applied source prompt order to ST');
             }
         }
 
-        markDirty();
+        // ★ Rebuild UI (will pick up the reordered DOM for correct within-folder order)
+        isImporting = true;
         rebuildFolderUI();
+        isImporting = false;
+
+        console.log('[PF] IMPORT DONE, final folders:', d.folders.map(f => `${f.name}(order=${f.order})`).join(', '));
     }
 
 
@@ -936,7 +1039,7 @@
         sorted.splice(tgtIdx, 0, srcFolder);
         // Reassign sequential orders
         sorted.forEach((f, i) => f.order = i);
-        markDirty(); rebuildFolderUI();
+        markDirty(); needsSTSync = true; rebuildFolderUI();
     }
 
     /* ─── Toggle all in folder ─── */
