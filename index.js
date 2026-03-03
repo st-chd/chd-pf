@@ -56,10 +56,24 @@
                 workingData = saved ? JSON.parse(JSON.stringify(saved)) : { folders: [], assignments: {} };
             }
         } else {
-            // 세션 도중 프리셋 변경: 기존 세션 상태를 버리고 저장된 프리셋에서 깨끗하게 다시 불러오기
+            // 세션 도중 프리셋 변경
             const saved = extensionSettings[MODULE_NAME].presets[p];
-            workingData = saved ? JSON.parse(JSON.stringify(saved)) : { folders: [], assignments: {} };
-            // 변경된 불러오기 상태를 세션 상태에 반영
+            if (saved) {
+                // 기존에 저장된 데이터가 있는 프리셋으로 이동: 저장된 걸 불러옴
+                workingData = JSON.parse(JSON.stringify(saved));
+            } else {
+                // [다른 이름으로 저장(Save As) 버그 픽스]
+                // 새로 만들어진 프리셋이어서 저장된 폴더 데이터가 아예 없는 경우:
+                // 이전 프리셋에서 사용 중이던 구조(workingData)를 새 프리셋으로 복사하여 날아가는 현상 방지.
+                if (workingData) {
+                    console.log(`[PF] Save As detected: carried over existing folders into ${p}`);
+                    // workingData 유지 (복사 처리)
+                    dirty = true; // 새로운 프리셋에 해당 변경사항이 저장될 수 있도록 더티 마킹
+                } else {
+                    workingData = { folders: [], assignments: {} };
+                }
+            }
+            // 변경된 상태를 세션 상태에 반영
             extensionSettings[MODULE_NAME].sessionState = { preset: p, data: JSON.parse(JSON.stringify(workingData)) };
             ctx().saveSettingsDebounced();
         }
@@ -840,58 +854,101 @@
         inner.querySelector('.pf-popup-cancel').addEventListener('click', () => overlay.remove());
     }
 
-    /* ─── 설정 가져오기 ─── */
+    /* ─── 설정 가져오기 / 내보내기 ─── */
     function showImportSettingsPopup() {
         const { extensionSettings } = ctx();
         const allPresets = extensionSettings[MODULE_NAME]?.presets || {};
         const presetNames = Object.keys(allPresets).filter(p => p !== workingPreset);
 
-        if (presetNames.length === 0) {
-            showAlertPopup('가져올 다른 프리셋이 없습니다.');
-            return;
-        }
-
         const inner = document.createElement('div');
         inner.className = 'pf-modal-inner';
 
         let options = '';
-        presetNames.forEach(p => options += `<option value="${p}">${p}</option>`);
+        if (presetNames.length > 0) {
+            presetNames.forEach(p => options += `<option value="${p}">${p}</option>`);
+        } else {
+            options = `<option value="">(가져올 다른 프리셋이 없습니다)</option>`;
+        }
 
         inner.innerHTML = `
-            <div class="pf-popup-title">📥 다른 프리셋에서 설정 가져오기</div>
+            <div class="pf-popup-title">📥 폴더 설정 가져오기 / 내보내기</div>
             <div class="pf-popup-field">
-                <label>가져올 프리셋:</label>
-                <select class="pf-import-select text_pole">${options}</select>
+                <label>다른 프리셋에서 가져오기:</label>
+                <div style="display:flex;gap:4px;">
+                    <select class="pf-import-select text_pole" style="flex:1;" ${presetNames.length ? '' : 'disabled'}>${options}</select>
+                    <button class="pf-btn menu_button pf-import-preset-btn" ${presetNames.length ? '' : 'disabled'}>가져오기</button>
+                </div>
             </div>
-            <div class="pf-popup-field" style="margin-top:8px;display:flex;align-items:center;gap:6px;">
-                <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;"><input type="checkbox" class="pf-import-order-check"> 폴더/프롬프트 순서도 가져오기</label>
+            <div class="pf-popup-field" style="margin-top:4px;display:flex;align-items:center;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#aaa;"><input type="checkbox" class="pf-import-order-check"> 폴더 및 프롬프트 표시 순서도 포함 (덮어쓰기)</label>
             </div>
-            <div class="pf-popup-field" style="font-size:12px;color:#aaa;margin-top:10px;line-height:1.4;">
-                <span class="pf-import-desc">현재 프롬프트 순서를 유지한 채 폴더 구조만 가져옵니다.</span>
+            <hr style="border:0; border-top:1px solid rgba(255,255,255,0.1); margin:12px 0;">
+            <div class="pf-popup-field">
+                <label>파일로 내보내기 / 가져오기 (.json):</label>
+                <div style="display:flex;gap:4px;margin-top:4px;">
+                    <button class="pf-btn menu_button pf-export-file-btn" style="flex:1;">📤 파일로 내보내기</button>
+                    <button class="pf-btn menu_button pf-import-file-btn" style="flex:1;">📥 파일에서 가져오기</button>
+                    <input type="file" class="pf-import-file-input" accept=".json" style="display:none;">
+                </div>
             </div>
-            <div class="pf-popup-actions">
-                <button class="pf-btn menu_button pf-popup-ok">가져오기</button>
-                <button class="pf-btn menu_button pf-popup-cancel">취소</button>
+            <div class="pf-popup-actions" style="margin-top:16px;">
+                <button class="pf-btn menu_button pf-popup-cancel" style="margin-left:auto;">닫기</button>
             </div>`;
 
-        const orderCheck = inner.querySelector('.pf-import-order-check');
-        const desc = inner.querySelector('.pf-import-desc');
-        orderCheck.addEventListener('change', () => {
-            desc.textContent = orderCheck.checked
-                ? '소스 프리셋의 폴더 순서와 프롬프트 순서를 그대로 가져와 덮어씁니다.'
-                : '현재 프롬프트 순서를 유지한 채 폴더 구조만 가져옵니다.';
-        });
-
         const overlay = createModalOverlay(inner);
-        inner.querySelector('.pf-popup-ok').addEventListener('click', () => {
+        const orderCheck = inner.querySelector('.pf-import-order-check');
+
+        // 프리셋에서 가져오기
+        inner.querySelector('.pf-import-preset-btn').addEventListener('click', () => {
             const presetName = inner.querySelector('.pf-import-select').value;
             if (presetName && allPresets[presetName]) {
-                const importOrder = orderCheck.checked;
-                importSettingsFromPreset(allPresets[presetName], importOrder);
+                importSettingsFromPreset(allPresets[presetName], orderCheck.checked);
                 overlay.remove();
                 showAlertPopup('폴더 설정을 성공적으로 가져왔습니다.');
             }
         });
+
+        // 파일로 내보내기
+        inner.querySelector('.pf-export-file-btn').addEventListener('click', () => {
+            const dataToExport = JSON.stringify(getPresetData(), null, 2);
+            const blob = new Blob([dataToExport], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const safeName = workingPreset.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            a.download = `pf_settings_${safeName}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showAlertPopup('설정 파일이 다운로드 되었습니다.');
+        });
+
+        // 파일에서 가져오기
+        const fileInput = inner.querySelector('.pf-import-file-input');
+        inner.querySelector('.pf-import-file-btn').addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const importedData = JSON.parse(ev.target.result);
+                    if (!importedData || !importedData.folders) throw new Error('올바르지 않은 PF 설정 파일입니다.');
+                    importSettingsFromPreset(importedData, orderCheck.checked);
+                    overlay.remove();
+                    showAlertPopup('설정 파일에서 폴더를 가져왔습니다.');
+                } catch (err) {
+                    console.error('[PF] Import file error:', err);
+                    showAlertPopup('파일을 읽는 도중 오류가 발생했습니다.');
+                }
+            };
+            reader.readAsText(file);
+        });
+
         inner.querySelector('.pf-popup-cancel').addEventListener('click', () => overlay.remove());
     }
 
