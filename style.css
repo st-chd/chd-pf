@@ -1,14 +1,14 @@
 /* ============================================================
-   Prompt Folders & Search — Styles
+   Prompt Folders & Search — 스타일
    ============================================================ */
 
-/* ★ Hide prompt manager separator */
+/* ★ 프롬프트 매니저 구분선 숨기기 */
 #completion_prompt_manager .completion_prompt_manager_list_separator hr {
     display: none !important;
 }
 
 
-/* ─── Toolbar ─── */
+/* ─── 도구 모음 (Toolbar) ─── */
 .pf-toolbar {
     display: flex;
     flex-direction: column;
@@ -49,7 +49,7 @@
     white-space: nowrap;
 }
 
-/* ─── Folder Header ─── */
+/* ─── 폴더 헤더 (Folder Header) ─── */
 .pf-folder-header {
     display: grid;
     grid-template-columns: auto 1fr auto auto auto auto auto;
@@ -119,7 +119,7 @@
     opacity: 1;
 }
 
-/* ─── Uncategorized Header ─── */
+/* ─── 미분류 헤더 (Uncategorized Header) ─── */
 .pf-uncat-header {
     display: flex;
     align-items: center;
@@ -133,7 +133,7 @@
     grid-column: 1 / -1;
 }
 
-/* ─── Folder items indent ─── */
+/* ─── 폴더 항목 들여쓰기 (Folder items indent) ─── */
 .pf-folder-item {
     border-left: 3px solid var(--SmartThemeBorderColor, #555) !important;
     margin-left: 8px !important;
@@ -142,7 +142,7 @@
     grid-template-columns: 5fr 80px 55px !important;
 }
 
-/* ─── Folder assign button ─── */
+/* ─── 폴더 할당 버튼 (Folder assign button) ─── */
 .pf-folder-btn {
     cursor: pointer;
     opacity: 0.5;
@@ -156,7 +156,7 @@
     opacity: 1;
 }
 
-/* ─── Folder Picker ─── */
+/* ─── 폴더 선택기 (Folder Picker) ─── */
 .pf-picker {
     background: var(--SmartThemeBlurTintColor, #2a2a2a);
     border: 1px solid var(--SmartThemeBorderColor, #666);
@@ -185,7 +185,7 @@
     border-left: 3px solid var(--SmartThemeQuoteColor, #7b8dff);
 }
 
-/* ─── Modal Overlay ─── */
+/* ─── 모달 오버레이 (Modal Overlay) ─── */
 .pf-overlay {
     position: fixed !important;
     top: 0 !important;
@@ -216,7 +216,7 @@
     color: var(--SmartThemeBodyColor, #ccc);
 }
 
-/* ─── Popup shared ─── */
+/* ─── 팝업 공통 라벨 (Popup shared) ─── */
 .pf-popup-title {
     font-size: 15px;
     font-weight: 700;
@@ -249,7 +249,7 @@
     flex-wrap: wrap;
 }
 
-/* ─── Color row ─── */
+/* ─── 컬러 설정 행 (Color row) ─── */
 .pf-color-row {
     display: flex;
     align-items: center;
@@ -280,7 +280,7 @@
     box-sizing: border-box;
 }
 
-/* ─── Prompt checklist ─── */
+/* ─── 프롬프트 체크리스트 (Prompt checklist) ─── */
 .pf-prompt-list {
     max-height: 200px;
     overflow-y: auto;
@@ -339,7 +339,7 @@
     color: var(--SmartThemeBodyColor, #999);
 }
 
-/* ─── Filter row + select-all ─── */
+/* ─── 필터 행 + 전체선택 (Filter row + select-all) ─── */
 .pf-filter-row {
     display: flex;
     align-items: center;
@@ -380,7 +380,7 @@
     white-space: pre-line;
 }
 
-/* ─── Empty state ─── */
+/* ─── 빈 상태 (Empty state) ─── */
 .pf-empty-msg {
     text-align: center;
     padding: 12px 8px;
@@ -389,7 +389,7 @@
     font-style: italic;
 }
 
-/* ─── Folder DnD ─── */
+/* ─── 폴더 드래그 앤 드롭 (Folder DnD) ─── */
 .pf-folder-header[draggable="true"] {
     cursor: grab;
 }
